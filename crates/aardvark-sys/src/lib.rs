@@ -64,13 +64,44 @@ fn lib() -> Option<&'static Library> {
                 // 4. Current working directory
                 PathBuf::from("aardvark.so"),
             ];
-            for path in candidates {
+            let mut tried_any = false;
+            for path in &candidates {
                 if path.as_os_str().is_empty() {
                     continue;
                 }
-                if let Ok(lib) = unsafe { Library::new(&path) } {
-                    return Some(lib);
+                tried_any = true;
+                match unsafe { Library::new(path) } {
+                    Ok(lib) => {
+                        eprintln!("[aardvark-sys] loaded library from {}", path.display());
+                        return Some(lib);
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        // Surface architecture mismatch explicitly — the most common
+                        // failure on Apple Silicon machines with an x86_64 SDK.
+                        if msg.contains("incompatible architecture") || msg.contains("mach-o file") {
+                            eprintln!(
+                                "[aardvark-sys] ARCHITECTURE MISMATCH loading {}: {}\n\
+                                 [aardvark-sys] The vendored aardvark.so is x86_64 but this \
+                                 binary is {}.\n\
+                                 [aardvark-sys] Download the arm64 SDK from https://www.totalphase.com/downloads/ \
+                                 or build with --target x86_64-apple-darwin.",
+                                path.display(),
+                                msg,
+                                std::env::consts::ARCH,
+                            );
+                        } else {
+                            eprintln!(
+                                "[aardvark-sys] could not load {}: {}",
+                                path.display(),
+                                msg
+                            );
+                        }
+                    }
                 }
+            }
+            if !tried_any {
+                eprintln!("[aardvark-sys] no library candidates found; set ZEROCLAW_AARDVARK_LIB or place aardvark.so next to the binary");
             }
             None
         })
