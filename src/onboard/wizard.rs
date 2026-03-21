@@ -205,6 +205,7 @@ pub async fn run_wizard(force: bool) -> Result<Config> {
         claude_code: crate::config::ClaudeCodeConfig::default(),
         codex_cli: crate::config::CodexCliConfig::default(),
         gemini_cli: crate::config::GeminiCliConfig::default(),
+        opencode_cli: crate::config::OpenCodeCliConfig::default(),
     };
 
     println!(
@@ -640,6 +641,7 @@ async fn run_quick_setup_with_home(
         claude_code: crate::config::ClaudeCodeConfig::default(),
         codex_cli: crate::config::CodexCliConfig::default(),
         gemini_cli: crate::config::GeminiCliConfig::default(),
+        opencode_cli: crate::config::OpenCodeCliConfig::default(),
     };
 
     config.save().await?;

@@ -23,7 +23,7 @@ pub use schema::{
     McpConfig, McpServerConfig, McpTransport, MemoryConfig, MemoryPolicyConfig,
     Microsoft365Config, ModelRouteConfig, MultimodalConfig, NextcloudTalkConfig,
     NodeTransportConfig, NodesConfig, NotionConfig, ObservabilityConfig, OpenAiSttConfig,
-    OpenAiTtsConfig, OpenVpnTunnelConfig, OtpConfig, OtpMethod, PacingConfig,
+    OpenAiTtsConfig, OpenCodeCliConfig, OpenVpnTunnelConfig, OtpConfig, OtpMethod, PacingConfig,
     PeripheralBoardConfig, PeripheralsConfig, PiperTtsConfig, PluginsConfig, ProjectIntelConfig,
     ProxyConfig, ProxyScope, QdrantConfig, QueryClassificationConfig, ReliabilityConfig,
     ResourceLimitsConfig, RuntimeConfig, SandboxBackend, SandboxConfig, SchedulerConfig,

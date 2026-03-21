@@ -71,6 +71,7 @@ pub mod model_routing_config;
 pub mod model_switch;
 pub mod node_tool;
 pub mod notion_tool;
+pub mod opencode_cli;
 pub mod pdf_read;
 pub mod project_intel;
 pub mod proxy_config;
@@ -151,6 +152,7 @@ pub use model_switch::ModelSwitchTool;
 #[allow(unused_imports)]
 pub use node_tool::NodeTool;
 pub use notion_tool::NotionTool;
+pub use opencode_cli::OpenCodeCliTool;
 pub use pdf_read::PdfReadTool;
 pub use project_intel::ProjectIntelTool;
 pub use proxy_config::ProxyConfigTool;
@@ -659,6 +661,14 @@ pub fn all_tools_with_runtime(
         tool_arcs.push(Arc::new(GeminiCliTool::new(
             security.clone(),
             root_config.gemini_cli.clone(),
+        )));
+    }
+
+    // OpenCode CLI delegation tool
+    if root_config.opencode_cli.enabled {
+        tool_arcs.push(Arc::new(OpenCodeCliTool::new(
+            security.clone(),
+            root_config.opencode_cli.clone(),
         )));
     }
 
