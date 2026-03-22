@@ -48,6 +48,8 @@ const LARK_ACK_REACTIONS_JA: &[&str] = &[
     "DONE",
 ];
 
+const MAX_LARK_AUDIO_BYTES: u64 = 25 * 1024 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LarkAckLocale {
     ZhCn,
@@ -510,6 +512,9 @@ impl LarkChannel {
     }
 
     pub fn with_transcription(mut self, config: crate::config::TranscriptionConfig) -> Self {
+        if !config.enabled {
+            return self;
+        }
         match super::transcription::TranscriptionManager::new(&config) {
             Ok(m) => {
                 self.transcription_manager = Some(Arc::new(m));
@@ -1356,6 +1361,19 @@ impl LarkChannel {
         }
     }
 
+    fn check_audio_content_length(resp: &reqwest::Response) -> anyhow::Result<()> {
+        if let Some(content_length) = resp.content_length() {
+            if content_length > MAX_LARK_AUDIO_BYTES {
+                anyhow::bail!(
+                    "Lark audio resource too large: {} bytes (max {})",
+                    content_length,
+                    MAX_LARK_AUDIO_BYTES
+                );
+            }
+        }
+        Ok(())
+    }
+
     async fn download_audio_resource(
         &self,
         message_id: &str,
@@ -1394,6 +1412,7 @@ impl LarkChannel {
                         resp.status()
                     );
                 }
+                Self::check_audio_content_length(&resp)?;
                 return Ok((
                     resp.bytes().await?.to_vec(),
                     inferred_audio_filename(file_key),
@@ -1402,6 +1421,7 @@ impl LarkChannel {
 
             anyhow::bail!("Lark audio download failed: {}", status);
         }
+        Self::check_audio_content_length(&resp)?;
         Ok((
             resp.bytes().await?.to_vec(),
             inferred_audio_filename(file_key),
@@ -1447,13 +1467,21 @@ impl LarkChannel {
         &self,
         payload: &serde_json::Value,
     ) -> Vec<ChannelMessage> {
+        let event_type = payload
+            .pointer("/header/event_type")
+            .and_then(|e| e.as_str())
+            .unwrap_or("");
+        if event_type != "im.message.receive_v1" {
+            return vec![];
+        }
+
         let msg_type = payload
             .pointer("/event/message/message_type")
             .and_then(|t| t.as_str())
             .unwrap_or("");
 
         if msg_type != "audio" {
-            return self.parse_event_payload(payload);
+            return self.parse_event_payload(payload).await;
         }
 
         let Some(manager) = self.transcription_manager.as_deref() else {
@@ -1531,6 +1559,7 @@ impl LarkChannel {
             channel: self.channel_name().to_string(),
             timestamp,
             thread_ts: None,
+            interruption_scope_id: None,
         }]
     }
 
@@ -3592,9 +3621,7 @@ mod tests {
         let mut ch = make_channel();
         ch.api_base_override = Some(mock_server.uri());
 
-        let result = ch
-            .download_audio_resource("om_msg_1", "fk_audio_key")
-            .await;
+        let result = ch.download_audio_resource("om_msg_1", "fk_audio_key").await;
         assert!(result.is_ok());
         let (bytes, filename) = result.unwrap();
         assert_eq!(bytes.len(), 64);
