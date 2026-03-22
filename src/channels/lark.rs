@@ -400,6 +400,8 @@ pub struct LarkChannel {
     proxy_url: Option<String>,
     transcription: Option<crate::config::TranscriptionConfig>,
     transcription_manager: Option<Arc<super::transcription::TranscriptionManager>>,
+    #[cfg(test)]
+    api_base_override: Option<String>,
 }
 
 impl LarkChannel {
@@ -446,6 +448,8 @@ impl LarkChannel {
             proxy_url: None,
             transcription: None,
             transcription_manager: None,
+            #[cfg(test)]
+            api_base_override: None,
         }
     }
 
@@ -531,7 +535,11 @@ impl LarkChannel {
         self.platform.channel_name()
     }
 
-    fn api_base(&self) -> &'static str {
+    fn api_base(&self) -> &str {
+        #[cfg(test)]
+        if let Some(ref url) = self.api_base_override {
+            return url.as_str();
+        }
         self.platform.api_base()
     }
 
@@ -3447,5 +3455,149 @@ mod tests {
             .try_transcribe_audio_message("om_123", "{}", manager)
             .await;
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn lark_audio_skips_when_manager_none() {
+        let ch = make_channel();
+        assert!(ch.transcription_manager.is_none());
+
+        let payload = serde_json::json!({
+            "event": {
+                "sender": {
+                    "sender_id": { "open_id": "ou_testuser123" }
+                },
+                "message": {
+                    "message_id": "om_audio_1",
+                    "message_type": "audio",
+                    "content": "{\"file_key\":\"fk_abc123\"}",
+                    "chat_id": "oc_chat1",
+                    "chat_type": "p2p",
+                    "mentions": [],
+                    "create_time": "1699999999000"
+                }
+            }
+        });
+
+        let msgs = ch.parse_event_payload_async(&payload).await;
+        assert!(msgs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn lark_audio_routes_through_transcription_manager() {
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        // Mock the tenant access token endpoint
+        Mock::given(method("POST"))
+            .and(path_regex("/auth/v3/tenant_access_token/internal"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "tenant_access_token": "test-tenant-token",
+                "expire": 7200
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // Mock the audio resource download endpoint
+        Mock::given(method("GET"))
+            .and(path_regex("/im/v1/messages/.+/resources/.+"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0u8; 128]))
+            .mount(&mock_server)
+            .await;
+
+        // Mock whisper transcription endpoint
+        let whisper_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_regex("/v1/transcribe"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"text": "test transcript"})),
+            )
+            .mount(&whisper_server)
+            .await;
+
+        let mut config = crate::config::TranscriptionConfig::default();
+        config.local_whisper = Some(crate::config::LocalWhisperConfig {
+            url: format!("{}/v1/transcribe", whisper_server.uri()),
+            bearer_token: "test-token".to_string(),
+            max_audio_bytes: 10 * 1024 * 1024,
+            timeout_secs: 30,
+        });
+        config.default_provider = "local_whisper".to_string();
+
+        let mut ch = make_channel();
+        ch.api_base_override = Some(mock_server.uri());
+        let ch = ch.with_transcription(config);
+
+        let payload = serde_json::json!({
+            "event": {
+                "sender": {
+                    "sender_id": { "open_id": "ou_testuser123" }
+                },
+                "message": {
+                    "message_id": "om_audio_2",
+                    "message_type": "audio",
+                    "content": "{\"file_key\":\"fk_abc123\"}",
+                    "chat_id": "oc_chat1",
+                    "chat_type": "p2p",
+                    "mentions": [],
+                    "create_time": "1699999999000"
+                }
+            }
+        });
+
+        let msgs = ch.parse_event_payload_async(&payload).await;
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].content, "test transcript");
+    }
+
+    #[tokio::test]
+    async fn lark_audio_token_refresh_on_invalid_token_response() {
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        // Token endpoint always returns valid token
+        Mock::given(method("POST"))
+            .and(path_regex("/auth/v3/tenant_access_token/internal"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "tenant_access_token": "refreshed-token",
+                "expire": 7200
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // Resource endpoint: first call returns 401, second returns audio bytes
+        Mock::given(method("GET"))
+            .and(path_regex("/im/v1/messages/.+/resources/.+"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "code": 99991663,
+                "msg": "token invalid"
+            })))
+            .up_to_n_times(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex("/im/v1/messages/.+/resources/.+"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0u8; 64]))
+            .mount(&mock_server)
+            .await;
+
+        let mut ch = make_channel();
+        ch.api_base_override = Some(mock_server.uri());
+
+        let result = ch
+            .download_audio_resource("om_msg_1", "fk_audio_key")
+            .await;
+        assert!(result.is_ok());
+        let (bytes, filename) = result.unwrap();
+        assert_eq!(bytes.len(), 64);
+        assert_eq!(filename, "voice.m4a");
     }
 }
