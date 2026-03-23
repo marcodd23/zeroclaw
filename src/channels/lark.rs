@@ -964,16 +964,6 @@ impl LarkChannel {
                             }
                         }
                         "audio" => {
-                            if lark_msg.chat_type == "group"
-                                && !should_respond_in_group(
-                                    self.mention_only,
-                                    self.resolved_bot_open_id().as_deref(),
-                                    &lark_msg.mentions,
-                                    &Vec::new(),
-                                )
-                            {
-                                continue;
-                            }
                             let Some(manager) = self.transcription_manager.as_deref() else {
                                 tracing::debug!("Lark WS: audio message in {} (transcription not configured)", lark_msg.chat_id);
                                 continue;
@@ -1361,17 +1351,18 @@ impl LarkChannel {
         }
     }
 
-    fn check_audio_content_length(resp: &reqwest::Response) -> anyhow::Result<()> {
-        if let Some(content_length) = resp.content_length() {
-            if content_length > MAX_LARK_AUDIO_BYTES {
+    async fn stream_audio_bytes(mut resp: reqwest::Response) -> anyhow::Result<Vec<u8>> {
+        let mut body = Vec::new();
+        while let Some(chunk) = resp.chunk().await? {
+            body.extend_from_slice(&chunk);
+            if body.len() as u64 > MAX_LARK_AUDIO_BYTES {
                 anyhow::bail!(
-                    "Lark audio resource too large: {} bytes (max {})",
-                    content_length,
+                    "Lark audio download exceeds {} byte limit",
                     MAX_LARK_AUDIO_BYTES
                 );
             }
         }
-        Ok(())
+        Ok(body)
     }
 
     async fn download_audio_resource(
@@ -1412,20 +1403,14 @@ impl LarkChannel {
                         resp.status()
                     );
                 }
-                Self::check_audio_content_length(&resp)?;
-                return Ok((
-                    resp.bytes().await?.to_vec(),
-                    inferred_audio_filename(file_key),
-                ));
+                let bytes = Self::stream_audio_bytes(resp).await?;
+                return Ok((bytes, inferred_audio_filename(file_key)));
             }
 
             anyhow::bail!("Lark audio download failed: {}", status);
         }
-        Self::check_audio_content_length(&resp)?;
-        Ok((
-            resp.bytes().await?.to_vec(),
-            inferred_audio_filename(file_key),
-        ))
+        let bytes = Self::stream_audio_bytes(resp).await?;
+        Ok((bytes, inferred_audio_filename(file_key)))
     }
 
     async fn try_transcribe_audio_message(
@@ -1866,7 +1851,7 @@ impl LarkChannel {
             }
 
             // Parse event messages
-            let messages = state.channel.parse_event_payload(&payload).await;
+            let messages = state.channel.parse_event_payload_async(&payload).await;
             if !messages.is_empty() {
                 if let Some(message_id) = payload
                     .pointer("/event/message/message_id")
@@ -3333,13 +3318,13 @@ mod tests {
     }
 
     #[test]
-    fn lark_manager_some_when_valid_config() {
+    fn lark_manager_none_when_disabled() {
         let tc = crate::config::TranscriptionConfig {
             enabled: false,
             ..Default::default()
         };
         let ch = make_channel().with_transcription(tc);
-        assert!(ch.transcription_manager.is_some());
+        assert!(ch.transcription_manager.is_none());
     }
 
     #[test]
@@ -3492,6 +3477,9 @@ mod tests {
         assert!(ch.transcription_manager.is_none());
 
         let payload = serde_json::json!({
+            "header": {
+                "event_type": "im.message.receive_v1"
+            },
             "event": {
                 "sender": {
                     "sender_id": { "open_id": "ou_testuser123" }
