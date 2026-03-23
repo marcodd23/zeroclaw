@@ -205,7 +205,7 @@ impl Tool for GeminiCliTool {
                     || err_msg.contains("not found")
                     || err_msg.contains("cannot find")
                 {
-                    "Gemini CLI ('gemini') not found in PATH. Install with: npm install -g @anthropic-ai/gemini-cli or see https://github.com/google-gemini/gemini-cli".into()
+                    "Gemini CLI ('gemini') not found in PATH. Install with: npm install -g @google/gemini-cli or see https://github.com/google-gemini/gemini-cli".into()
                 } else {
                     format!("Failed to execute gemini: {e}")
                 };

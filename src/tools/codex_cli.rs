@@ -147,7 +147,7 @@ impl Tool for CodexCliTool {
 
         // Build CLI command
         let mut cmd = Command::new("codex");
-        cmd.arg("exec").arg(prompt);
+        cmd.arg("-q").arg(prompt);
 
         // Environment: clear everything, pass only safe vars + configured passthrough.
         cmd.env_clear();
