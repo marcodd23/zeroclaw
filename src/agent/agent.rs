@@ -48,6 +48,8 @@ pub struct Agent {
     security_summary: Option<String>,
     /// Autonomy level from config; controls safety prompt instructions.
     autonomy_level: crate::security::AutonomyLevel,
+    /// Provider name for cost tracking (e.g. "anthropic", "openai").
+    provider_name: String,
 }
 
 pub struct AgentBuilder {
@@ -75,6 +77,7 @@ pub struct AgentBuilder {
     tool_descriptions: Option<ToolDescriptions>,
     security_summary: Option<String>,
     autonomy_level: Option<crate::security::AutonomyLevel>,
+    provider_name: Option<String>,
 }
 
 impl AgentBuilder {
@@ -104,6 +107,7 @@ impl AgentBuilder {
             tool_descriptions: None,
             security_summary: None,
             autonomy_level: None,
+            provider_name: None,
         }
     }
 
@@ -236,6 +240,11 @@ impl AgentBuilder {
         self
     }
 
+    pub fn provider_name(mut self, name: String) -> Self {
+        self.provider_name = Some(name);
+        self
+    }
+
     pub fn build(self) -> Result<Agent> {
         let mut tools = self
             .tools
@@ -291,6 +300,7 @@ impl AgentBuilder {
             autonomy_level: self
                 .autonomy_level
                 .unwrap_or(crate::security::AutonomyLevel::Supervised),
+            provider_name: self.provider_name.unwrap_or_else(|| "unknown".into()),
         })
     }
 }
@@ -514,6 +524,7 @@ impl Agent {
             .auto_save(config.memory.auto_save)
             .security_summary(Some(security.prompt_summary()))
             .autonomy_level(config.autonomy.level)
+            .provider_name(provider_name.to_string())
             .build()
     }
 
@@ -750,6 +761,15 @@ impl Agent {
                 Ok(resp) => resp,
                 Err(err) => return Err(err),
             };
+
+            // Record cost usage if a cost tracking context is scoped by the caller.
+            if let Some(ref usage) = response.usage {
+                crate::agent::loop_::record_tool_loop_cost_usage(
+                    &self.provider_name,
+                    &effective_model,
+                    usage,
+                );
+            }
 
             let (text, calls) = self.tool_dispatcher.parse_response(&response);
             if calls.is_empty() {

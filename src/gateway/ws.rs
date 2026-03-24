@@ -355,8 +355,18 @@ async fn process_chat_message(
         "model": state.model,
     }));
 
-    // Multi-turn chat via persistent Agent (history is maintained across turns)
-    match agent.turn(content).await {
+    // Build cost tracking context so agent.turn() records token usage.
+    let cost_ctx = state.cost_tracker.as_ref().map(|tracker| {
+        let prices = std::sync::Arc::new(state.config.lock().cost.prices.clone());
+        crate::agent::loop_::ToolLoopCostTrackingContext::new(tracker.clone(), prices)
+    });
+
+    // Multi-turn chat via persistent Agent (history is maintained across turns).
+    // Scope the cost tracking context so LLM calls inside turn() are recorded.
+    let turn_result = crate::agent::loop_::TOOL_LOOP_COST_TRACKING_CONTEXT
+        .scope(cost_ctx, agent.turn(content))
+        .await;
+    match turn_result {
         Ok(response) => {
             // Persist assistant response
             if let Some(ref backend) = state.session_backend {

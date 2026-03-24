@@ -70,7 +70,7 @@ fn lookup_model_pricing<'a>(
 
 /// Record token usage from an LLM response via the task-local cost tracker.
 /// Returns `(total_tokens, cost_usd)` on success, `None` when not scoped or no usage.
-fn record_tool_loop_cost_usage(
+pub(crate) fn record_tool_loop_cost_usage(
     provider_name: &str,
     model: &str,
     usage: &crate::providers::traits::TokenUsage,
