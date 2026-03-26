@@ -186,7 +186,11 @@ impl Tool for FileReadTool {
 
                 Ok(ToolResult {
                     success: true,
-                    output: format!("{numbered}{summary}"),
+                    output: format!(
+                        "<external_data source=\"file_read\" path=\"{path}\">\n\
+                         {numbered}{summary}\n\
+                         </external_data>"
+                    ),
                     error: None,
                 })
             }
@@ -199,7 +203,11 @@ impl Tool for FileReadTool {
                 if let Some(text) = try_extract_pdf_text(&bytes) {
                     return Ok(ToolResult {
                         success: true,
-                        output: text,
+                        output: format!(
+                            "<external_data source=\"file_read\" path=\"{path}\">\n\
+                             {text}\n\
+                             </external_data>"
+                        ),
                         error: None,
                     });
                 }
@@ -208,7 +216,11 @@ impl Tool for FileReadTool {
                 let lossy = String::from_utf8_lossy(&bytes).into_owned();
                 Ok(ToolResult {
                     success: true,
-                    output: lossy,
+                    output: format!(
+                        "<external_data source=\"file_read\" path=\"{path}\">\n\
+                         {lossy}\n\
+                         </external_data>"
+                    ),
                     error: None,
                 })
             }

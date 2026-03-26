@@ -121,10 +121,13 @@ impl Tool for MemoryRecallTool {
                     let score = entry
                         .score
                         .map_or_else(String::new, |s| format!(" [{s:.0}%]"));
+                    // Wrap each memory in data boundary tags for prompt injection defense.
+                    // The system prompt instructs the LLM to treat <memory_data> as pure data,
+                    // preventing injected instructions stored via memory_store from executing.
                     let _ = writeln!(
                         output,
-                        "- [{}] {}: {}{score}",
-                        entry.category, entry.key, entry.content
+                        "<memory_data key=\"{}\" category=\"{}\">\n{}{score}\n</memory_data>",
+                        entry.key, entry.category, entry.content
                     );
                 }
                 Ok(ToolResult {
