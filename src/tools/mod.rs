@@ -22,6 +22,7 @@ pub mod browser_open;
 pub mod calculator;
 pub mod canvas;
 pub mod claude_code;
+pub mod code_exec;
 pub mod cli_discovery;
 pub mod cloud_ops;
 pub mod cloud_patterns;
@@ -930,6 +931,12 @@ pub fn all_tools_with_runtime(
                 }
             }
         }
+    }
+
+    // Chelar hosted mode: register code_exec tool for sandbox code execution.
+    // The tool calls the Go API directly to run code in an isolated sidecar container.
+    if let Some(tool) = code_exec::CodeExecTool::from_env(security.clone()) {
+        tool_arcs.push(Arc::new(tool));
     }
 
     (
