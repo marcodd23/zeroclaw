@@ -88,6 +88,7 @@ pub struct CronPatchBody {
     pub schedule: Option<String>,
     pub command: Option<String>,
     pub prompt: Option<String>,
+    pub enabled: Option<bool>,
 }
 
 // ── Handlers ────────────────────────────────────────────────────
@@ -441,6 +442,7 @@ pub async fn handle_api_cron_patch(
         schedule,
         command: patch_command,
         prompt: patch_prompt,
+        enabled: body.enabled,
         ..crate::cron::CronJobPatch::default()
     };
 
