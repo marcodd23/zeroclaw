@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::time::Duration;
 
-use crate::gateway::nodes::{NodeInvocation, NodeRegistry};
+use crate::nodes::{NodeInvocation, NodeRegistry};
 use zeroclaw_api::tool::{Tool, ToolResult};
 use zeroclaw_tools::node_capabilities::requires_approval;
 

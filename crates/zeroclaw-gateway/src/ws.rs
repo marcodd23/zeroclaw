@@ -163,7 +163,7 @@ async fn handle_socket(
 
     // Build a persistent Agent for this connection so history is maintained across turns.
     let config = state.config.lock().clone();
-    let mut agent = match crate::agent::Agent::from_config(&config).await {
+    let mut agent = match zeroclaw_runtime::agent::Agent::from_config(&config).await {
         Ok(a) => a,
         Err(e) => {
             tracing::error!(error = %e, "Agent initialization failed");
@@ -391,12 +391,12 @@ async fn handle_socket(
 /// and tool results are forwarded to the WebSocket client in real time.
 async fn process_chat_message(
     state: &AppState,
-    agent: &mut crate::agent::Agent,
+    agent: &mut zeroclaw_runtime::agent::Agent,
     sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
     content: &str,
     session_key: &str,
 ) {
-    use crate::agent::TurnEvent;
+    use zeroclaw_runtime::agent::TurnEvent;
 
     let provider_label = state
         .config

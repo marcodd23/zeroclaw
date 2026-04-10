@@ -15,6 +15,8 @@ pub mod api_plugins;
 pub mod api_webauthn;
 pub mod auth_rate_limit;
 pub mod canvas;
+pub mod hardware_context;
+pub mod node_tool;
 pub mod nodes;
 pub mod session_queue;
 pub mod sse;
@@ -22,12 +24,6 @@ pub mod static_files;
 pub mod tls;
 pub mod ws;
 
-use crate::cost::CostTracker;
-use crate::platform;
-use crate::security::pairing::{PairingGuard, constant_time_eq, is_public_bind};
-use crate::tools;
-use crate::tools::CanvasStore;
-use crate::util::truncate_with_ellipsis;
 use anyhow::{Context, Result};
 use axum::{
     Router,
@@ -57,6 +53,12 @@ use zeroclaw_infra::session_backend::SessionBackend;
 use zeroclaw_infra::session_sqlite::SqliteSessionBackend;
 use zeroclaw_memory::{self, Memory, MemoryCategory};
 use zeroclaw_providers::{self, ChatMessage, Provider};
+use zeroclaw_runtime::cost::CostTracker;
+use zeroclaw_runtime::platform;
+use zeroclaw_runtime::security::pairing::{PairingGuard, constant_time_eq, is_public_bind};
+use zeroclaw_runtime::tools;
+use zeroclaw_runtime::tools::CanvasStore;
+use zeroclaw_runtime::util::truncate_with_ellipsis;
 
 /// Maximum request body size (64KB) — prevents memory exhaustion
 pub const MAX_BODY_SIZE: usize = 65_536;
@@ -348,7 +350,7 @@ pub struct AppState {
     /// Gmail Pub/Sub push notification channel
     pub gmail_push: Option<Arc<GmailPushChannel>>,
     /// Observability backend for metrics scraping
-    pub observer: Arc<dyn crate::observability::Observer>,
+    pub observer: Arc<dyn zeroclaw_runtime::observability::Observer>,
     /// Registered tool specs (for web dashboard tools page)
     pub tools_registry: Arc<Vec<ToolSpec>>,
     /// Cost tracker (optional, for web dashboard cost page)
@@ -399,8 +401,11 @@ pub async fn run_gateway(
     let config_state = Arc::new(Mutex::new(config.clone()));
 
     // ── Hooks ──────────────────────────────────────────────────────
-    let hooks: Option<std::sync::Arc<crate::hooks::HookRunner>> = if config.hooks.enabled {
-        Some(std::sync::Arc::new(crate::hooks::HookRunner::new()))
+    let hooks: Option<std::sync::Arc<zeroclaw_runtime::hooks::HookRunner>> = if config.hooks.enabled
+    {
+        Some(std::sync::Arc::new(
+            zeroclaw_runtime::hooks::HookRunner::new(),
+        ))
     } else {
         None
     };
@@ -724,7 +729,7 @@ pub async fn run_gateway(
         .filter(|p| !p.is_empty());
 
     // ── Tunnel ────────────────────────────────────────────────
-    let tunnel = crate::tunnel::create_tunnel(&config.tunnel)?;
+    let tunnel = zeroclaw_runtime::tunnel::create_tunnel(&config.tunnel)?;
     let mut tunnel_url: Option<String> = None;
 
     if let Some(ref tun) = tunnel {
@@ -787,7 +792,7 @@ pub async fn run_gateway(
     println!("  GET  {pfx}/metrics   — Prometheus metrics");
     println!("  Press Ctrl+C to stop.\n");
 
-    crate::health::mark_component_ok("gateway");
+    zeroclaw_runtime::health::mark_component_ok("gateway");
 
     // Fire gateway start hook
     if let Some(ref hooks) = hooks {
@@ -795,9 +800,9 @@ pub async fn run_gateway(
     }
 
     // Wrap observer with broadcast capability for SSE
-    let broadcast_observer: Arc<dyn crate::observability::Observer> =
+    let broadcast_observer: Arc<dyn zeroclaw_runtime::observability::Observer> =
         Arc::new(sse::BroadcastObserver::new(
-            crate::observability::create_observer(&config.observability),
+            zeroclaw_runtime::observability::create_observer(&config.observability),
             event_tx.clone(),
             event_buffer.clone(),
         ));
@@ -859,18 +864,18 @@ pub async fn run_gateway(
         canvas_store,
         #[cfg(feature = "webauthn")]
         webauthn: if config.security.webauthn.enabled {
-            let secret_store = Arc::new(crate::security::SecretStore::new(
+            let secret_store = Arc::new(zeroclaw_runtime::security::SecretStore::new(
                 &config.workspace_dir,
                 true,
             ));
-            let wa_config = crate::security::webauthn::WebAuthnConfig {
+            let wa_config = zeroclaw_runtime::security::webauthn::WebAuthnConfig {
                 enabled: true,
                 rp_id: config.security.webauthn.rp_id.clone(),
                 rp_origin: config.security.webauthn.rp_origin.clone(),
                 rp_name: config.security.webauthn.rp_name.clone(),
             };
             Some(Arc::new(api_webauthn::WebAuthnState {
-                manager: crate::security::webauthn::WebAuthnManager::new(
+                manager: zeroclaw_runtime::security::webauthn::WebAuthnManager::new(
                     wa_config,
                     secret_store,
                     &config.workspace_dir,
@@ -1129,7 +1134,7 @@ async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
         "status": "ok",
         "paired": state.pairing.is_paired(),
         "require_pairing": state.pairing.require_pairing(),
-        "runtime": crate::health::snapshot_json(),
+        "runtime": zeroclaw_runtime::health::snapshot_json(),
     });
     Json(body)
 }
@@ -1145,11 +1150,11 @@ fn prometheus_disabled_hint() -> String {
 
 #[cfg(feature = "observability-prometheus")]
 fn prometheus_observer_from_state(
-    observer: &dyn crate::observability::Observer,
-) -> Option<&crate::observability::PrometheusObserver> {
+    observer: &dyn zeroclaw_runtime::observability::Observer,
+) -> Option<&zeroclaw_runtime::observability::PrometheusObserver> {
     observer
         .as_any()
-        .downcast_ref::<crate::observability::PrometheusObserver>()
+        .downcast_ref::<zeroclaw_runtime::observability::PrometheusObserver>()
         .or_else(|| {
             observer
                 .as_any()
@@ -1158,7 +1163,7 @@ fn prometheus_observer_from_state(
                     broadcast
                         .inner()
                         .as_any()
-                        .downcast_ref::<crate::observability::PrometheusObserver>()
+                        .downcast_ref::<zeroclaw_runtime::observability::PrometheusObserver>()
                 })
         })
 }
@@ -1288,7 +1293,7 @@ async fn run_gateway_chat_simple(state: &AppState, message: &str) -> anyhow::Res
     // workspace-aware system context before model invocation.
     let system_prompt = {
         let config_guard = state.config.lock();
-        crate::agent::system_prompt::build_system_prompt(
+        zeroclaw_runtime::agent::system_prompt::build_system_prompt(
             &config_guard.workspace_dir,
             &state.model,
             &[], // tools - empty for simple chat
@@ -1322,7 +1327,10 @@ async fn run_gateway_chat_with_tools(
     session_id: Option<&str>,
 ) -> anyhow::Result<String> {
     let config = state.config.lock().clone();
-    Box::pin(crate::agent::process_message(config, message, session_id)).await
+    Box::pin(zeroclaw_runtime::agent::process_message(
+        config, message, session_id,
+    ))
+    .await
 }
 
 /// Webhook request body
@@ -1446,26 +1454,25 @@ async fn handle_webhook(
     let model_label = state.model.clone();
     let started_at = Instant::now();
 
-    state
-        .observer
-        .record_event(&crate::observability::ObserverEvent::AgentStart {
+    state.observer.record_event(
+        &zeroclaw_runtime::observability::ObserverEvent::AgentStart {
             provider: provider_label.clone(),
             model: model_label.clone(),
-        });
-    state
-        .observer
-        .record_event(&crate::observability::ObserverEvent::LlmRequest {
+        },
+    );
+    state.observer.record_event(
+        &zeroclaw_runtime::observability::ObserverEvent::LlmRequest {
             provider: provider_label.clone(),
             model: model_label.clone(),
             messages_count: 1,
-        });
+        },
+    );
 
     match run_gateway_chat_simple(&state, message).await {
         Ok(response) => {
             let duration = started_at.elapsed();
-            state
-                .observer
-                .record_event(&crate::observability::ObserverEvent::LlmResponse {
+            state.observer.record_event(
+                &zeroclaw_runtime::observability::ObserverEvent::LlmResponse {
                     provider: provider_label.clone(),
                     model: model_label.clone(),
                     duration,
@@ -1473,19 +1480,20 @@ async fn handle_webhook(
                     error_message: None,
                     input_tokens: None,
                     output_tokens: None,
-                });
-            state.observer.record_metric(
-                &crate::observability::traits::ObserverMetric::RequestLatency(duration),
+                },
             );
-            state
-                .observer
-                .record_event(&crate::observability::ObserverEvent::AgentEnd {
+            state.observer.record_metric(
+                &zeroclaw_runtime::observability::traits::ObserverMetric::RequestLatency(duration),
+            );
+            state.observer.record_event(
+                &zeroclaw_runtime::observability::ObserverEvent::AgentEnd {
                     provider: provider_label,
                     model: model_label,
                     duration,
                     tokens_used: None,
                     cost_usd: None,
-                });
+                },
+            );
 
             let body = serde_json::json!({"response": response, "model": state.model});
             (StatusCode::OK, Json(body))
@@ -1494,9 +1502,8 @@ async fn handle_webhook(
             let duration = started_at.elapsed();
             let sanitized = zeroclaw_providers::sanitize_api_error(&e.to_string());
 
-            state
-                .observer
-                .record_event(&crate::observability::ObserverEvent::LlmResponse {
+            state.observer.record_event(
+                &zeroclaw_runtime::observability::ObserverEvent::LlmResponse {
                     provider: provider_label.clone(),
                     model: model_label.clone(),
                     duration,
@@ -1504,25 +1511,26 @@ async fn handle_webhook(
                     error_message: Some(sanitized.clone()),
                     input_tokens: None,
                     output_tokens: None,
-                });
+                },
+            );
             state.observer.record_metric(
-                &crate::observability::traits::ObserverMetric::RequestLatency(duration),
+                &zeroclaw_runtime::observability::traits::ObserverMetric::RequestLatency(duration),
             );
             state
                 .observer
-                .record_event(&crate::observability::ObserverEvent::Error {
+                .record_event(&zeroclaw_runtime::observability::ObserverEvent::Error {
                     component: "gateway".to_string(),
                     message: sanitized.clone(),
                 });
-            state
-                .observer
-                .record_event(&crate::observability::ObserverEvent::AgentEnd {
+            state.observer.record_event(
+                &zeroclaw_runtime::observability::ObserverEvent::AgentEnd {
                     provider: provider_label,
                     model: model_label,
                     duration,
                     tokens_used: None,
                     cost_usd: None,
-                });
+                },
+            );
 
             tracing::error!("Webhook provider error: {}", sanitized);
             let err = serde_json::json!({"error": "LLM request failed"});
@@ -2337,7 +2345,7 @@ mod tests {
             nextcloud_talk_webhook_secret: None,
             wati: None,
             gmail_push: None,
-            observer: Arc::new(crate::observability::NoopObserver),
+            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -2346,9 +2354,9 @@ mod tests {
             node_registry: Arc::new(nodes::NodeRegistry::new(16)),
             path_prefix: String::new(),
             session_backend: None,
-            session_queue: std::sync::Arc::new(
-                crate::gateway::session_queue::SessionActorQueue::new(8, 30, 600),
-            ),
+            session_queue: std::sync::Arc::new(crate::session_queue::SessionActorQueue::new(
+                8, 30, 600,
+            )),
             device_registry: None,
             pending_pairings: None,
             canvas_store: CanvasStore::new(),
@@ -2377,16 +2385,16 @@ mod tests {
         let event_tx = tokio::sync::broadcast::channel(16).0;
         let event_buffer = Arc::new(sse::EventBuffer::new(16));
         let wrapped = sse::BroadcastObserver::new(
-            Box::new(crate::observability::PrometheusObserver::new()),
+            Box::new(zeroclaw_runtime::observability::PrometheusObserver::new()),
             event_tx.clone(),
             event_buffer,
         );
-        crate::observability::Observer::record_event(
+        zeroclaw_runtime::observability::Observer::record_event(
             &wrapped,
-            &crate::observability::ObserverEvent::HeartbeatTick,
+            &zeroclaw_runtime::observability::ObserverEvent::HeartbeatTick,
         );
 
-        let observer: Arc<dyn crate::observability::Observer> = Arc::new(wrapped);
+        let observer: Arc<dyn zeroclaw_runtime::observability::Observer> = Arc::new(wrapped);
         let state = AppState {
             config: Arc::new(Mutex::new(Config::default())),
             provider: Arc::new(MockProvider::default()),
@@ -2417,9 +2425,9 @@ mod tests {
             node_registry: Arc::new(nodes::NodeRegistry::new(16)),
             path_prefix: String::new(),
             session_backend: None,
-            session_queue: std::sync::Arc::new(
-                crate::gateway::session_queue::SessionActorQueue::new(8, 30, 600),
-            ),
+            session_queue: std::sync::Arc::new(crate::session_queue::SessionActorQueue::new(
+                8, 30, 600,
+            )),
             device_registry: None,
             pending_pairings: None,
             canvas_store: CanvasStore::new(),
@@ -2606,7 +2614,7 @@ mod tests {
         assert_eq!(raw_parsed.gateway.paired_tokens.len(), 1);
         let on_disk = &raw_parsed.gateway.paired_tokens[0];
         assert!(
-            crate::security::SecretStore::is_encrypted(on_disk),
+            zeroclaw_runtime::security::SecretStore::is_encrypted(on_disk),
             "paired_token should be encrypted on disk"
         );
     }
@@ -2803,7 +2811,7 @@ mod tests {
             nextcloud_talk_webhook_secret: None,
             wati: None,
             gmail_push: None,
-            observer: Arc::new(crate::observability::NoopObserver),
+            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -2812,9 +2820,9 @@ mod tests {
             node_registry: Arc::new(nodes::NodeRegistry::new(16)),
             path_prefix: String::new(),
             session_backend: None,
-            session_queue: std::sync::Arc::new(
-                crate::gateway::session_queue::SessionActorQueue::new(8, 30, 600),
-            ),
+            session_queue: std::sync::Arc::new(crate::session_queue::SessionActorQueue::new(
+                8, 30, 600,
+            )),
             device_registry: None,
             pending_pairings: None,
             canvas_store: CanvasStore::new(),
@@ -2882,7 +2890,7 @@ mod tests {
             nextcloud_talk_webhook_secret: None,
             wati: None,
             gmail_push: None,
-            observer: Arc::new(crate::observability::NoopObserver),
+            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -2891,9 +2899,9 @@ mod tests {
             node_registry: Arc::new(nodes::NodeRegistry::new(16)),
             path_prefix: String::new(),
             session_backend: None,
-            session_queue: std::sync::Arc::new(
-                crate::gateway::session_queue::SessionActorQueue::new(8, 30, 600),
-            ),
+            session_queue: std::sync::Arc::new(crate::session_queue::SessionActorQueue::new(
+                8, 30, 600,
+            )),
             device_registry: None,
             pending_pairings: None,
             canvas_store: CanvasStore::new(),
@@ -2973,7 +2981,7 @@ mod tests {
             nextcloud_talk_webhook_secret: None,
             wati: None,
             gmail_push: None,
-            observer: Arc::new(crate::observability::NoopObserver),
+            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -2982,9 +2990,9 @@ mod tests {
             node_registry: Arc::new(nodes::NodeRegistry::new(16)),
             path_prefix: String::new(),
             session_backend: None,
-            session_queue: std::sync::Arc::new(
-                crate::gateway::session_queue::SessionActorQueue::new(8, 30, 600),
-            ),
+            session_queue: std::sync::Arc::new(crate::session_queue::SessionActorQueue::new(
+                8, 30, 600,
+            )),
             device_registry: None,
             pending_pairings: None,
             canvas_store: CanvasStore::new(),
@@ -3036,7 +3044,7 @@ mod tests {
             nextcloud_talk_webhook_secret: None,
             wati: None,
             gmail_push: None,
-            observer: Arc::new(crate::observability::NoopObserver),
+            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -3045,9 +3053,9 @@ mod tests {
             node_registry: Arc::new(nodes::NodeRegistry::new(16)),
             path_prefix: String::new(),
             session_backend: None,
-            session_queue: std::sync::Arc::new(
-                crate::gateway::session_queue::SessionActorQueue::new(8, 30, 600),
-            ),
+            session_queue: std::sync::Arc::new(crate::session_queue::SessionActorQueue::new(
+                8, 30, 600,
+            )),
             device_registry: None,
             pending_pairings: None,
             canvas_store: CanvasStore::new(),
@@ -3104,7 +3112,7 @@ mod tests {
             nextcloud_talk_webhook_secret: None,
             wati: None,
             gmail_push: None,
-            observer: Arc::new(crate::observability::NoopObserver),
+            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -3113,9 +3121,9 @@ mod tests {
             node_registry: Arc::new(nodes::NodeRegistry::new(16)),
             path_prefix: String::new(),
             session_backend: None,
-            session_queue: std::sync::Arc::new(
-                crate::gateway::session_queue::SessionActorQueue::new(8, 30, 600),
-            ),
+            session_queue: std::sync::Arc::new(crate::session_queue::SessionActorQueue::new(
+                8, 30, 600,
+            )),
             device_registry: None,
             pending_pairings: None,
             canvas_store: CanvasStore::new(),
@@ -3177,7 +3185,7 @@ mod tests {
             nextcloud_talk_webhook_secret: None,
             wati: None,
             gmail_push: None,
-            observer: Arc::new(crate::observability::NoopObserver),
+            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -3186,9 +3194,9 @@ mod tests {
             node_registry: Arc::new(nodes::NodeRegistry::new(16)),
             path_prefix: String::new(),
             session_backend: None,
-            session_queue: std::sync::Arc::new(
-                crate::gateway::session_queue::SessionActorQueue::new(8, 30, 600),
-            ),
+            session_queue: std::sync::Arc::new(crate::session_queue::SessionActorQueue::new(
+                8, 30, 600,
+            )),
             device_registry: None,
             pending_pairings: None,
             canvas_store: CanvasStore::new(),
@@ -3247,7 +3255,7 @@ mod tests {
             nextcloud_talk_webhook_secret: Some(Arc::from(secret)),
             wati: None,
             gmail_push: None,
-            observer: Arc::new(crate::observability::NoopObserver),
+            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -3256,9 +3264,9 @@ mod tests {
             node_registry: Arc::new(nodes::NodeRegistry::new(16)),
             path_prefix: String::new(),
             session_backend: None,
-            session_queue: std::sync::Arc::new(
-                crate::gateway::session_queue::SessionActorQueue::new(8, 30, 600),
-            ),
+            session_queue: std::sync::Arc::new(crate::session_queue::SessionActorQueue::new(
+                8, 30, 600,
+            )),
             device_registry: None,
             pending_pairings: None,
             canvas_store: CanvasStore::new(),

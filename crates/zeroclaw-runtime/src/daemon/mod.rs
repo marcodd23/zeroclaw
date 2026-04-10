@@ -45,7 +45,31 @@ async fn wait_for_shutdown_signal() -> Result<()> {
     Ok(())
 }
 
-pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
+/// Optional subsystem start functions injected by the binary crate.
+/// This allows the daemon to spawn subsystems without depending on their crates.
+#[allow(clippy::type_complexity)]
+pub struct DaemonSubsystems {
+    /// Start the gateway HTTP server. Injected by the binary when `gateway` feature is on.
+    pub gateway_start: Option<
+        Box<
+            dyn Fn(
+                    String,
+                    u16,
+                    Config,
+                    Option<tokio::sync::broadcast::Sender<serde_json::Value>>,
+                ) -> std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send>>
+                + Send
+                + Sync,
+        >,
+    >,
+}
+
+pub async fn run(
+    config: Config,
+    host: String,
+    port: u16,
+    subsystems: DaemonSubsystems,
+) -> Result<()> {
     let initial_backoff = config.reliability.channel_initial_backoff_secs.max(1);
     let max_backoff = config
         .reliability
@@ -66,26 +90,23 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
 
     let mut handles: Vec<JoinHandle<()>> = vec![spawn_state_writer(config.clone())];
 
-    {
-        #[cfg(feature = "gateway")]
-        {
-            let gateway_cfg = config.clone();
-            let gateway_host = host.clone();
-            let gateway_event_tx = event_tx.clone();
-            handles.push(spawn_component_supervisor(
-                "gateway",
-                initial_backoff,
-                max_backoff,
-                move || {
-                    let cfg = gateway_cfg.clone();
-                    let host = gateway_host.clone();
-                    let tx = gateway_event_tx.clone();
-                    async move {
-                        Box::pin(crate::gateway::run_gateway(&host, port, cfg, Some(tx))).await
-                    }
-                },
-            ));
-        }
+    if let Some(gateway_start) = subsystems.gateway_start {
+        let gateway_cfg = config.clone();
+        let gateway_host = host.clone();
+        let gateway_event_tx = event_tx.clone();
+        let gateway_start = std::sync::Arc::new(gateway_start);
+        handles.push(spawn_component_supervisor(
+            "gateway",
+            initial_backoff,
+            max_backoff,
+            move || {
+                let cfg = gateway_cfg.clone();
+                let host = gateway_host.clone();
+                let tx = gateway_event_tx.clone();
+                let start = gateway_start.clone();
+                async move { start(host, port, cfg, Some(tx)).await }
+            },
+        ));
     }
 
     {

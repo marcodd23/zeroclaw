@@ -103,33 +103,33 @@ pub async fn handle_events_history(
 
 /// Broadcast observer that forwards events to the SSE broadcast channel.
 pub struct BroadcastObserver {
-    inner: Box<dyn crate::observability::Observer>,
+    inner: Box<dyn zeroclaw_runtime::observability::Observer>,
     tx: tokio::sync::broadcast::Sender<serde_json::Value>,
     buffer: Arc<EventBuffer>,
 }
 
 impl BroadcastObserver {
     pub fn new(
-        inner: Box<dyn crate::observability::Observer>,
+        inner: Box<dyn zeroclaw_runtime::observability::Observer>,
         tx: tokio::sync::broadcast::Sender<serde_json::Value>,
         buffer: Arc<EventBuffer>,
     ) -> Self {
         Self { inner, tx, buffer }
     }
 
-    pub fn inner(&self) -> &dyn crate::observability::Observer {
+    pub fn inner(&self) -> &dyn zeroclaw_runtime::observability::Observer {
         self.inner.as_ref()
     }
 }
 
-impl crate::observability::Observer for BroadcastObserver {
-    fn record_event(&self, event: &crate::observability::ObserverEvent) {
+impl zeroclaw_runtime::observability::Observer for BroadcastObserver {
+    fn record_event(&self, event: &zeroclaw_runtime::observability::ObserverEvent) {
         // Forward to inner observer
         self.inner.record_event(event);
 
         // Broadcast to SSE subscribers
         let json = match event {
-            crate::observability::ObserverEvent::LlmRequest {
+            zeroclaw_runtime::observability::ObserverEvent::LlmRequest {
                 provider, model, ..
             } => serde_json::json!({
                 "type": "llm_request",
@@ -137,7 +137,7 @@ impl crate::observability::Observer for BroadcastObserver {
                 "model": model,
                 "timestamp": chrono::Utc::now().to_rfc3339(),
             }),
-            crate::observability::ObserverEvent::ToolCall {
+            zeroclaw_runtime::observability::ObserverEvent::ToolCall {
                 tool,
                 duration,
                 success,
@@ -148,12 +148,14 @@ impl crate::observability::Observer for BroadcastObserver {
                 "success": success,
                 "timestamp": chrono::Utc::now().to_rfc3339(),
             }),
-            crate::observability::ObserverEvent::ToolCallStart { tool, .. } => serde_json::json!({
-                "type": "tool_call_start",
-                "tool": tool,
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-            }),
-            crate::observability::ObserverEvent::Error { component, message } => {
+            zeroclaw_runtime::observability::ObserverEvent::ToolCallStart { tool, .. } => {
+                serde_json::json!({
+                    "type": "tool_call_start",
+                    "tool": tool,
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                })
+            }
+            zeroclaw_runtime::observability::ObserverEvent::Error { component, message } => {
                 serde_json::json!({
                     "type": "error",
                     "component": component,
@@ -161,7 +163,7 @@ impl crate::observability::Observer for BroadcastObserver {
                     "timestamp": chrono::Utc::now().to_rfc3339(),
                 })
             }
-            crate::observability::ObserverEvent::AgentStart { provider, model } => {
+            zeroclaw_runtime::observability::ObserverEvent::AgentStart { provider, model } => {
                 serde_json::json!({
                     "type": "agent_start",
                     "provider": provider,
@@ -169,7 +171,7 @@ impl crate::observability::Observer for BroadcastObserver {
                     "timestamp": chrono::Utc::now().to_rfc3339(),
                 })
             }
-            crate::observability::ObserverEvent::AgentEnd {
+            zeroclaw_runtime::observability::ObserverEvent::AgentEnd {
                 provider,
                 model,
                 duration,
@@ -191,7 +193,7 @@ impl crate::observability::Observer for BroadcastObserver {
         let _ = self.tx.send(json);
     }
 
-    fn record_metric(&self, metric: &crate::observability::traits::ObserverMetric) {
+    fn record_metric(&self, metric: &zeroclaw_runtime::observability::traits::ObserverMetric) {
         self.inner.record_metric(metric);
     }
 

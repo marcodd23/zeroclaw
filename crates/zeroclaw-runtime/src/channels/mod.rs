@@ -167,8 +167,8 @@ const AUTOSAVE_MIN_MESSAGE_CHARS: usize = 20;
 // System prompt functions live in `crate::agent::system_prompt`.
 #[allow(unused_imports)]
 pub use crate::agent::system_prompt::{
-    build_system_prompt, build_system_prompt_with_mode, build_system_prompt_with_mode_and_autonomy,
-    BOOTSTRAP_MAX_CHARS,
+    BOOTSTRAP_MAX_CHARS, build_system_prompt, build_system_prompt_with_mode,
+    build_system_prompt_with_mode_and_autonomy,
 };
 
 const DEFAULT_CHANNEL_INITIAL_BACKOFF_SECS: u64 = 2;
@@ -3715,8 +3715,6 @@ async fn run_message_dispatch_loop(
         log_worker_join_result(result);
     }
 }
-
-
 
 fn normalize_telegram_identity(value: &str) -> String {
     value.trim().trim_start_matches('@').to_string()

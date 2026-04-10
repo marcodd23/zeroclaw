@@ -1,1 +1,1 @@
-pub use zeroclaw_runtime::gateway::*;
+pub use zeroclaw_gateway::*;

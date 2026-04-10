@@ -80,13 +80,13 @@ pub mod observability;
 pub(crate) mod onboard;
 #[cfg(feature = "agent-runtime")]
 pub mod peripherals;
+#[cfg(feature = "agent-runtime")]
+pub mod platform;
 pub mod providers;
 #[cfg(feature = "agent-runtime")]
 pub mod rag;
 #[cfg(feature = "agent-runtime")]
 pub mod routines;
-#[cfg(feature = "agent-runtime")]
-pub mod platform;
 #[cfg(feature = "agent-runtime")]
 pub(crate) mod security;
 #[cfg(feature = "agent-runtime")]

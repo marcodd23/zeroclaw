@@ -11880,6 +11880,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "zeroclaw-gateway"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "chrono",
+ "directories",
+ "futures-util",
+ "hex",
+ "hmac",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "mime_guess",
+ "parking_lot",
+ "rusqlite",
+ "rust-embed",
+ "rustls 0.23.37",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "tokio-stream",
+ "toml 1.1.2+spec-1.1.0",
+ "tower",
+ "tower-http",
+ "tracing",
+ "uuid",
+ "zeroclaw-api",
+ "zeroclaw-channels",
+ "zeroclaw-config",
+ "zeroclaw-infra",
+ "zeroclaw-memory",
+ "zeroclaw-plugins",
+ "zeroclaw-providers",
+ "zeroclaw-runtime",
+ "zeroclaw-tools",
+]
+
+[[package]]
 name = "zeroclaw-infra"
 version = "0.7.0"
 dependencies = [
@@ -12023,16 +12066,12 @@ dependencies = [
  "hex",
  "hmac",
  "hostname",
- "http-body-util",
- "hyper",
- "hyper-util",
  "image",
  "indicatif",
  "landlock",
  "libc",
  "lru",
  "matrix-sdk",
- "mime_guess",
  "nanohtml2text",
  "nostr-sdk",
  "nusb",
@@ -12052,7 +12091,6 @@ dependencies = [
  "rppal",
  "rumqttc",
  "rusqlite",
- "rust-embed",
  "rustls 0.23.37",
  "rustls-pemfile",
  "rustls-pki-types",
@@ -12240,6 +12278,7 @@ dependencies = [
  "zeroclaw-api",
  "zeroclaw-channels",
  "zeroclaw-config",
+ "zeroclaw-gateway",
  "zeroclaw-infra",
  "zeroclaw-macros",
  "zeroclaw-memory",

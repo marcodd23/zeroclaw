@@ -75,7 +75,7 @@ pub struct CronAddBody {
     pub command: Option<String>,
     pub job_type: Option<String>,
     pub prompt: Option<String>,
-    pub delivery: Option<crate::cron::DeliveryConfig>,
+    pub delivery: Option<zeroclaw_runtime::cron::DeliveryConfig>,
     pub session_target: Option<String>,
     pub model: Option<String>,
     pub allowed_tools: Option<Vec<String>>,
@@ -102,7 +102,7 @@ pub async fn handle_api_status(
     }
 
     let config = state.config.lock().clone();
-    let health = crate::health::snapshot();
+    let health = zeroclaw_runtime::health::snapshot();
 
     let mut channels = serde_json::Map::new();
 
@@ -115,7 +115,7 @@ pub async fn handle_api_status(
         .as_deref()
         .filter(|s| !s.is_empty())
         .map(String::from)
-        .unwrap_or_else(crate::i18n::detect_locale);
+        .unwrap_or_else(zeroclaw_runtime::i18n::detect_locale);
 
     let body = serde_json::json!({
         "provider": config.default_provider,
@@ -246,7 +246,7 @@ pub async fn handle_api_cron_list(
     }
 
     let config = state.config.lock().clone();
-    match crate::cron::list_jobs(&config) {
+    match zeroclaw_runtime::cron::list_jobs(&config) {
         Ok(jobs) => Json(serde_json::json!({"jobs": jobs})).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -280,11 +280,11 @@ pub async fn handle_api_cron_add(
     } = body;
 
     let config = state.config.lock().clone();
-    let schedule = crate::cron::Schedule::Cron {
+    let schedule = zeroclaw_runtime::cron::Schedule::Cron {
         expr: schedule,
         tz: None,
     };
-    if let Err(e) = crate::cron::validate_delivery_config(delivery.as_ref()) {
+    if let Err(e) = zeroclaw_runtime::cron::validate_delivery_config(delivery.as_ref()) {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": format!("Failed to add cron job: {e}")})),
@@ -310,13 +310,13 @@ pub async fn handle_api_cron_add(
 
         let session_target = session_target
             .as_deref()
-            .map(crate::cron::SessionTarget::parse)
+            .map(zeroclaw_runtime::cron::SessionTarget::parse)
             .unwrap_or_default();
 
-        let default_delete = matches!(schedule, crate::cron::Schedule::At { .. });
+        let default_delete = matches!(schedule, zeroclaw_runtime::cron::Schedule::At { .. });
         let delete_after_run = delete_after_run.unwrap_or(default_delete);
 
-        crate::cron::add_agent_job(
+        zeroclaw_runtime::cron::add_agent_job(
             &config,
             name,
             schedule,
@@ -339,7 +339,9 @@ pub async fn handle_api_cron_add(
             }
         };
 
-        crate::cron::add_shell_job_with_approval(&config, name, schedule, command, delivery, false)
+        zeroclaw_runtime::cron::add_shell_job_with_approval(
+            &config, name, schedule, command, delivery, false,
+        )
     };
 
     match result {
@@ -367,7 +369,7 @@ pub async fn handle_api_cron_runs(
     let config = state.config.lock().clone();
 
     // Verify the job exists before listing runs.
-    if let Err(e) = crate::cron::get_job(&config, &id) {
+    if let Err(e) = zeroclaw_runtime::cron::get_job(&config, &id) {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": format!("Cron job not found: {e}")})),
@@ -375,7 +377,7 @@ pub async fn handle_api_cron_runs(
             .into_response();
     }
 
-    match crate::cron::list_runs(&config, &id, limit) {
+    match zeroclaw_runtime::cron::list_runs(&config, &id, limit) {
         Ok(runs) => {
             let runs_json: Vec<serde_json::Value> = runs
                 .iter()
@@ -416,7 +418,7 @@ pub async fn handle_api_cron_patch(
 
     // Build the schedule from the provided expression string (if any).
     let schedule = match body.schedule {
-        Some(expr) if !expr.trim().is_empty() => Some(crate::cron::Schedule::Cron {
+        Some(expr) if !expr.trim().is_empty() => Some(zeroclaw_runtime::cron::Schedule::Cron {
             expr: expr.trim().to_string(),
             tz: None,
         }),
@@ -426,7 +428,7 @@ pub async fn handle_api_cron_patch(
     // Route the edited text to the correct field based on the job's stored type.
     // The frontend sends a single textarea value; for agent jobs it is the prompt,
     // for shell jobs it is the command.
-    let existing = match crate::cron::get_job(&config, &id) {
+    let existing = match zeroclaw_runtime::cron::get_job(&config, &id) {
         Ok(j) => j,
         Err(e) => {
             return (
@@ -436,22 +438,22 @@ pub async fn handle_api_cron_patch(
                 .into_response();
         }
     };
-    let is_agent = matches!(existing.job_type, crate::cron::JobType::Agent);
+    let is_agent = matches!(existing.job_type, zeroclaw_runtime::cron::JobType::Agent);
     let (patch_command, patch_prompt) = if is_agent {
         (None, body.command.or(body.prompt))
     } else {
         (body.command.or(body.prompt), None)
     };
 
-    let patch = crate::cron::CronJobPatch {
+    let patch = zeroclaw_runtime::cron::CronJobPatch {
         name: body.name,
         schedule,
         command: patch_command,
         prompt: patch_prompt,
-        ..crate::cron::CronJobPatch::default()
+        ..zeroclaw_runtime::cron::CronJobPatch::default()
     };
 
-    match crate::cron::update_shell_job_with_approval(&config, &id, patch, false) {
+    match zeroclaw_runtime::cron::update_shell_job_with_approval(&config, &id, patch, false) {
         Ok(job) => Json(serde_json::json!({"status": "ok", "job": job})).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -472,7 +474,7 @@ pub async fn handle_api_cron_delete(
     }
 
     let config = state.config.lock().clone();
-    match crate::cron::remove_job(&config, &id) {
+    match zeroclaw_runtime::cron::remove_job(&config, &id) {
         Ok(()) => Json(serde_json::json!({"status": "ok"})).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -551,7 +553,7 @@ pub async fn handle_api_integrations(
     }
 
     let config = state.config.lock().clone();
-    let entries = crate::integrations::registry::all_integrations();
+    let entries = zeroclaw_runtime::integrations::registry::all_integrations();
 
     let integrations: Vec<serde_json::Value> = entries
         .iter()
@@ -579,12 +581,15 @@ pub async fn handle_api_integrations_settings(
     }
 
     let config = state.config.lock().clone();
-    let entries = crate::integrations::registry::all_integrations();
+    let entries = zeroclaw_runtime::integrations::registry::all_integrations();
 
     let mut settings = serde_json::Map::new();
     for entry in &entries {
         let status = (entry.status_fn)(&config);
-        let enabled = matches!(status, crate::integrations::IntegrationStatus::Active);
+        let enabled = matches!(
+            status,
+            zeroclaw_runtime::integrations::IntegrationStatus::Active
+        );
         settings.insert(
             entry.name.to_string(),
             serde_json::json!({
@@ -608,19 +613,19 @@ pub async fn handle_api_doctor(
     }
 
     let config = state.config.lock().clone();
-    let results = crate::doctor::diagnose(&config);
+    let results = zeroclaw_runtime::doctor::diagnose(&config);
 
     let ok_count = results
         .iter()
-        .filter(|r| r.severity == crate::doctor::Severity::Ok)
+        .filter(|r| r.severity == zeroclaw_runtime::doctor::Severity::Ok)
         .count();
     let warn_count = results
         .iter()
-        .filter(|r| r.severity == crate::doctor::Severity::Warn)
+        .filter(|r| r.severity == zeroclaw_runtime::doctor::Severity::Warn)
         .count();
     let error_count = results
         .iter()
-        .filter(|r| r.severity == crate::doctor::Severity::Error)
+        .filter(|r| r.severity == zeroclaw_runtime::doctor::Severity::Error)
         .count();
 
     Json(serde_json::json!({
@@ -790,7 +795,7 @@ pub async fn handle_api_health(
         return e.into_response();
     }
 
-    let snapshot = crate::health::snapshot();
+    let snapshot = zeroclaw_runtime::health::snapshot();
     Json(serde_json::json!({"health": snapshot})).into_response()
 }
 
@@ -1539,8 +1544,7 @@ pub async fn handle_claude_code_hook(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::{AppState, GatewayRateLimiter, IdempotencyStore, nodes};
-    use crate::security::pairing::PairingGuard;
+    use crate::{AppState, GatewayRateLimiter, IdempotencyStore, nodes};
     use async_trait::async_trait;
     use axum::response::IntoResponse;
     use http_body_util::BodyExt;
@@ -1549,6 +1553,7 @@ mod tests {
     use std::time::Duration;
     use zeroclaw_memory::{Memory, MemoryCategory, MemoryEntry};
     use zeroclaw_providers::Provider;
+    use zeroclaw_runtime::security::pairing::PairingGuard;
 
     struct MockMemory;
 
@@ -1631,7 +1636,7 @@ mod tests {
             pairing: Arc::new(PairingGuard::new(false, &[])),
             trust_forwarded_headers: false,
             rate_limiter: Arc::new(GatewayRateLimiter::new(100, 100, 100)),
-            auth_limiter: Arc::new(crate::gateway::auth_rate_limit::AuthRateLimiter::new()),
+            auth_limiter: Arc::new(crate::auth_rate_limit::AuthRateLimiter::new()),
             idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300), 1000)),
             whatsapp: None,
             whatsapp_app_secret: None,
@@ -1641,21 +1646,19 @@ mod tests {
             nextcloud_talk_webhook_secret: None,
             wati: None,
             gmail_push: None,
-            observer: Arc::new(crate::observability::NoopObserver),
+            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
-            event_buffer: Arc::new(crate::gateway::sse::EventBuffer::new(16)),
+            event_buffer: Arc::new(crate::sse::EventBuffer::new(16)),
             shutdown_tx: tokio::sync::watch::channel(false).0,
             node_registry: Arc::new(nodes::NodeRegistry::new(16)),
             session_backend: None,
-            session_queue: Arc::new(crate::gateway::session_queue::SessionActorQueue::new(
-                8, 30, 600,
-            )),
+            session_queue: Arc::new(crate::session_queue::SessionActorQueue::new(8, 30, 600)),
             device_registry: None,
             pending_pairings: None,
             path_prefix: String::new(),
-            canvas_store: crate::tools::CanvasStore::new(),
+            canvas_store: zeroclaw_runtime::tools::CanvasStore::new(),
             #[cfg(feature = "webauthn")]
             webauthn: None,
         }
@@ -2173,9 +2176,9 @@ mod tests {
         assert_eq!(json["status"], "ok");
 
         let config = state.config.lock().clone();
-        let jobs = crate::cron::list_jobs(&config).unwrap();
+        let jobs = zeroclaw_runtime::cron::list_jobs(&config).unwrap();
         assert_eq!(jobs.len(), 1);
-        assert_eq!(jobs[0].job_type, crate::cron::JobType::Agent);
+        assert_eq!(jobs[0].job_type, zeroclaw_runtime::cron::JobType::Agent);
         assert_eq!(jobs[0].prompt.as_deref(), Some("summarize the latest logs"));
     }
 
@@ -2219,7 +2222,11 @@ mod tests {
         );
 
         let config = state.config.lock().clone();
-        assert!(crate::cron::list_jobs(&config).unwrap().is_empty());
+        assert!(
+            zeroclaw_runtime::cron::list_jobs(&config)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -2263,6 +2270,10 @@ mod tests {
         );
 
         let config = state.config.lock().clone();
-        assert!(crate::cron::list_jobs(&config).unwrap().is_empty());
+        assert!(
+            zeroclaw_runtime::cron::list_jobs(&config)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

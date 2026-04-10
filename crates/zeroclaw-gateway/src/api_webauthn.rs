@@ -4,11 +4,7 @@
 //! `webauthn` feature flag.
 
 use super::AppState;
-use crate::gateway::api::require_auth;
-use crate::security::webauthn::{
-    AuthenticateCredentialResponse, AuthenticationState, RegisterCredentialResponse,
-    RegistrationState, WebAuthnManager,
-};
+use crate::api::require_auth;
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -17,6 +13,10 @@ use axum::{
 use parking_lot::Mutex;
 use serde::Deserialize;
 use std::collections::HashMap;
+use zeroclaw_runtime::security::webauthn::{
+    AuthenticateCredentialResponse, AuthenticationState, RegisterCredentialResponse,
+    RegistrationState, WebAuthnManager,
+};
 
 /// Shared WebAuthn state for the gateway.
 pub struct WebAuthnState {

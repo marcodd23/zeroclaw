@@ -9,11 +9,11 @@
 //! - `POST /api/hardware/context` — append raw markdown to a device file
 //! - `GET  /api/hardware/context` — read all current hardware context files
 //! - `POST /api/hardware/reload`  — verify on-disk context; report what will be
-//!                                  used on the next chat request
+//!   used on the next chat request
 //!
 //! ## Live update semantics
 //!
-//! ZeroClaw's agent loop calls [`crate::hardware::boot`] on **every** request,
+//! ZeroClaw's agent loop calls [`zeroclaw_runtime::hardware::boot`] on **every** request,
 //! which re-reads `~/.zeroclaw/hardware/` from disk.  Writing to those files
 //! therefore takes effect on the very next `/api/chat` call — no daemon restart
 //! needed.  The `/api/hardware/reload` endpoint verifies what is on disk and
@@ -30,7 +30,7 @@
 
 use super::AppState;
 use axum::{
-    extract::{State},
+    extract::State,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
 };
@@ -83,7 +83,10 @@ fn validate_device_alias(alias: &str) -> Result<(), &'static str> {
     if alias.is_empty() || alias.len() > 64 {
         return Err("Device alias must be 1–64 characters");
     }
-    if !alias.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+    if !alias
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
         return Err("Device alias must contain only alphanumerics, hyphens, and underscores");
     }
     Ok(())
@@ -137,7 +140,7 @@ pub async fn handle_hardware_pin(
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": format!("Invalid JSON: {e}") })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -159,7 +162,7 @@ pub async fn handle_hardware_pin(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": e })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -170,19 +173,19 @@ pub async fn handle_hardware_pin(
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": e })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
     // Create devices dir + file if missing, then append.
-    if let Some(parent) = device_path.parent() {
-        if let Err(e) = fs::create_dir_all(parent).await {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("Failed to create directory: {e}") })),
-            )
-                .into_response();
-        }
+    if let Some(parent) = device_path.parent()
+        && let Err(e) = fs::create_dir_all(parent).await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Failed to create directory: {e}") })),
+        )
+            .into_response();
     }
 
     let line = if notes.is_empty() {
@@ -240,7 +243,7 @@ pub async fn handle_hardware_context_post(
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": format!("Invalid JSON: {e}") })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -268,7 +271,7 @@ pub async fn handle_hardware_context_post(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": e })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -279,18 +282,18 @@ pub async fn handle_hardware_context_post(
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": e })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
-    if let Some(parent) = device_path.parent() {
-        if let Err(e) = fs::create_dir_all(parent).await {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("Failed to create directory: {e}") })),
-            )
-                .into_response();
-        }
+    if let Some(parent) = device_path.parent()
+        && let Err(e) = fs::create_dir_all(parent).await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Failed to create directory: {e}") })),
+        )
+            .into_response();
     }
 
     // Ensure content ends with a newline so successive appends don't merge lines.
@@ -336,7 +339,7 @@ pub async fn handle_hardware_context_get(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": e })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -377,7 +380,7 @@ pub async fn handle_hardware_context_get(
 /// `POST /api/hardware/reload` — verify on-disk hardware context and report what  
 /// will be loaded on the next chat request.
 ///
-/// Since [`crate::hardware::boot`] re-reads from disk on every agent invocation,
+/// Since [`zeroclaw_runtime::hardware::boot`] re-reads from disk on every agent invocation,
 /// writing to the hardware files via the other endpoints already takes effect on
 /// the next `/api/chat` call.  This endpoint reads the same files and reports
 /// the current state so callers can confirm the update landed.
@@ -393,7 +396,7 @@ pub async fn handle_hardware_reload(
     let tool_count = state.tools_registry.len();
 
     // Reload hardware context from disk (same function used by the agent loop)
-    let context = crate::hardware::load_hardware_context_prompt(&[]);
+    let context = zeroclaw_runtime::hardware::load_hardware_context_prompt(&[]);
     let context_length = context.len();
 
     tracing::info!(

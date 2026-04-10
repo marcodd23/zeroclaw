@@ -124,11 +124,11 @@ mod observability;
 mod onboard;
 #[cfg(feature = "agent-runtime")]
 mod peripherals;
+#[cfg(feature = "agent-runtime")]
+mod platform;
 #[cfg(feature = "plugins-wasm")]
 mod plugins;
 mod providers;
-#[cfg(feature = "agent-runtime")]
-mod platform;
 #[cfg(feature = "agent-runtime")]
 mod security;
 #[cfg(feature = "agent-runtime")]
@@ -1349,7 +1349,17 @@ async fn main() -> Result<()> {
             } else {
                 info!("🧠 Starting ZeroClaw Daemon on {host}:{port}");
             }
-            Box::pin(daemon::run(config, host, port)).await
+            let subsystems = daemon::DaemonSubsystems {
+                #[cfg(feature = "gateway")]
+                gateway_start: Some(Box::new(|host, port, config, tx| {
+                    Box::pin(async move {
+                        Box::pin(zeroclaw_gateway::run_gateway(&host, port, config, tx)).await
+                    })
+                })),
+                #[cfg(not(feature = "gateway"))]
+                gateway_start: None,
+            };
+            Box::pin(daemon::run(config, host, port, subsystems)).await
         }
 
         Commands::Status { format } => {
