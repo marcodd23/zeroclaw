@@ -421,13 +421,21 @@ async fn process_chat_message(
     // Channel for streaming turn events from the agent.
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<TurnEvent>(64);
 
+    // Scope cost tracking context so token usage from `turn_streamed` is
+    // recorded to the global cost tracker (visible on /api/cost).
+    let cost_ctx = state.cost_tracker.as_ref().map(|tracker| {
+        let prices = std::sync::Arc::new(state.config.lock().cost.prices.clone());
+        zeroclaw_runtime::agent::cost::ToolLoopCostTrackingContext::new(tracker.clone(), prices)
+    });
+
     // Run the streamed turn concurrently: the agent produces events
     // while we forward them to the WebSocket below.  We cannot move
     // `agent` into a spawned task (it is `&mut`), so we use a join
     // instead — `turn_streamed` writes to the channel and we drain it
     // from the other branch.
     let content_owned = content.to_string();
-    let turn_fut = async { agent.turn_streamed(&content_owned, event_tx).await };
+    let turn_fut = zeroclaw_runtime::agent::cost::TOOL_LOOP_COST_TRACKING_CONTEXT
+        .scope(cost_ctx, async { agent.turn_streamed(&content_owned, event_tx).await });
 
     // Drive both futures concurrently: the agent turn produces events
     // and we relay them over WebSocket.

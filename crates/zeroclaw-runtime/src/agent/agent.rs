@@ -53,6 +53,8 @@ pub struct Agent {
     security_summary: Option<String>,
     /// Autonomy level from config; controls safety prompt instructions.
     autonomy_level: crate::security::AutonomyLevel,
+    /// Provider name for cost tracking (e.g. "openrouter", "anthropic").
+    provider_name: String,
     /// Activated MCP tools for deferred loading mode.
     /// When MCP deferred loading is enabled, tools are activated via `tool_search`
     /// and stored here for lookup during tool execution.
@@ -87,6 +89,7 @@ pub struct AgentBuilder {
     tool_descriptions: Option<ToolDescriptions>,
     security_summary: Option<String>,
     autonomy_level: Option<crate::security::AutonomyLevel>,
+    provider_name: Option<String>,
     activated_tools: Option<Arc<std::sync::Mutex<crate::tools::ActivatedToolSet>>>,
     hook_runner: Option<Arc<crate::hooks::HookRunner>>,
 }
@@ -124,6 +127,7 @@ impl AgentBuilder {
             tool_descriptions: None,
             security_summary: None,
             autonomy_level: None,
+            provider_name: None,
             activated_tools: None,
             hook_runner: None,
         }
@@ -261,6 +265,11 @@ impl AgentBuilder {
         self
     }
 
+    pub fn provider_name(mut self, name: String) -> Self {
+        self.provider_name = Some(name);
+        self
+    }
+
     pub fn activated_tools(
         mut self,
         activated: Option<Arc<std::sync::Mutex<tools::ActivatedToolSet>>>,
@@ -329,6 +338,7 @@ impl AgentBuilder {
             autonomy_level: self
                 .autonomy_level
                 .unwrap_or(crate::security::AutonomyLevel::Supervised),
+            provider_name: self.provider_name.unwrap_or_else(|| "unknown".into()),
             activated_tools: self.activated_tools,
             hook_runner: self.hook_runner,
         })
@@ -563,6 +573,7 @@ impl Agent {
             .auto_save(config.memory.auto_save)
             .security_summary(Some(security.prompt_summary()))
             .autonomy_level(config.autonomy.level)
+            .provider_name(provider_name.to_string())
             .activated_tools(activated_tools)
             .hook_runner(if config.hooks.enabled {
                 let mut runner = crate::hooks::HookRunner::new();
@@ -922,6 +933,15 @@ impl Agent {
                 Err(err) => return Err(err),
             };
 
+            // Record token usage via task-local cost tracker (if scoped).
+            if let Some(ref usage) = response.usage {
+                crate::agent::cost::record_tool_loop_cost_usage(
+                    &self.provider_name,
+                    &effective_model,
+                    usage,
+                );
+            }
+
             let (text, calls) = self.tool_dispatcher.parse_response(&response);
             if calls.is_empty() {
                 let final_text = if text.is_empty() {
@@ -1187,6 +1207,17 @@ impl Agent {
                     Err(err) => return Err(err),
                 }
             };
+
+            // Record token usage via task-local cost tracker (if scoped).
+            // For the streaming path, usage is None (accumulated from stream events);
+            // for the non-streaming fallback, usage is present.
+            if let Some(ref usage) = response.usage {
+                crate::agent::cost::record_tool_loop_cost_usage(
+                    &self.provider_name,
+                    &effective_model,
+                    usage,
+                );
+            }
 
             let (text, calls) = self.tool_dispatcher.parse_response(&response);
             if calls.is_empty() {
