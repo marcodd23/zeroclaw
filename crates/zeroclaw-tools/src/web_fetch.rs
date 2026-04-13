@@ -374,20 +374,21 @@ impl Tool for WebFetchTool {
 
         // If standard fetch succeeded well enough, return it directly.
         // Otherwise, try Firecrawl fallback if enabled.
-        if self.should_fallback_to_firecrawl(&standard_result) {
+        let mut result = standard_result;
+        if self.should_fallback_to_firecrawl(&result) {
             tracing::info!(
                 "web_fetch: standard fetch insufficient for {url}, attempting Firecrawl fallback"
             );
             match Box::pin(self.fetch_via_firecrawl(&url)).await {
                 Ok(firecrawl_result) if firecrawl_result.success => {
-                    return Ok(firecrawl_result);
+                    result = firecrawl_result;
                 }
                 Ok(firecrawl_result) => {
                     tracing::warn!(
                         "web_fetch: Firecrawl fallback also failed: {:?}",
                         firecrawl_result.error
                     );
-                    // Return original standard result if Firecrawl also failed
+                    // Keep original standard result if Firecrawl also failed
                 }
                 Err(e) => {
                     tracing::warn!("web_fetch: Firecrawl fallback error: {e}");
@@ -395,7 +396,17 @@ impl Tool for WebFetchTool {
             }
         }
 
-        Ok(standard_result)
+        // Wrap successful output in data boundary tags for prompt injection defense.
+        // The system prompt instructs the LLM to treat <external_data> as pure data,
+        // not as instructions — even if the page contains hidden malicious text.
+        if result.success && !result.output.is_empty() {
+            result.output = format!(
+                "<external_data source=\"web_fetch\" url=\"{url}\">\n{}\n</external_data>",
+                result.output
+            );
+        }
+
+        Ok(result)
     }
 }
 
