@@ -15,6 +15,7 @@
 //! To add a new tool, implement [`Tool`] in a new submodule and register it in
 //! [`all_tools_with_runtime`]. See `AGENTS.md` §7.3 for the full change playbook.
 
+pub mod code_exec;
 pub mod cron_add;
 pub mod cron_list;
 pub mod cron_remove;
@@ -951,6 +952,12 @@ pub fn all_tools_with_runtime(
             root_config.pipeline.clone(),
             pipeline_tools,
         )));
+    }
+
+    // Chelar code_exec tool — sandbox sidecar for code execution.
+    // Only registered when CHELAR_SANDBOX_API_URL and CHELAR_TENANT_ID are set.
+    if let Some(tool) = code_exec::CodeExecTool::from_env(security.clone()) {
+        tool_arcs.push(Arc::new(tool));
     }
 
     (
