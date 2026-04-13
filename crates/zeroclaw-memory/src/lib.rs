@@ -15,6 +15,8 @@ pub mod markdown;
 pub mod namespaced;
 pub mod none;
 pub mod policy;
+#[cfg(feature = "memory-postgres")]
+pub mod postgres;
 pub mod qdrant;
 pub mod response_cache;
 pub mod retrieval;
@@ -36,6 +38,8 @@ pub use namespaced::NamespacedMemory;
 pub use none::NoneMemory;
 #[allow(unused_imports)]
 pub use policy::PolicyEnforcer;
+#[cfg(feature = "memory-postgres")]
+pub use postgres::PostgresMemory;
 pub use qdrant::QdrantMemory;
 pub use response_cache::ResponseCache;
 #[allow(unused_imports)]
@@ -67,6 +71,30 @@ where
         }
         MemoryBackendKind::Qdrant | MemoryBackendKind::Markdown => {
             Ok(Box::new(MarkdownMemory::new(workspace_dir)))
+        }
+        #[cfg(feature = "memory-postgres")]
+        MemoryBackendKind::Postgres => {
+            // PostgreSQL backend for Chelar. Connection URL comes from
+            // ZEROCLAW_POSTGRES_MEMORY_URL env var; schema/table default to
+            // "public"/"memories".
+            let db_url = std::env::var("ZEROCLAW_POSTGRES_MEMORY_URL")
+                .unwrap_or_default();
+            if db_url.is_empty() {
+                anyhow::bail!(
+                    "memory backend is 'postgres' but ZEROCLAW_POSTGRES_MEMORY_URL is not set"
+                );
+            }
+            let schema = std::env::var("ZEROCLAW_POSTGRES_MEMORY_SCHEMA")
+                .unwrap_or_else(|_| "public".into());
+            let table = std::env::var("ZEROCLAW_POSTGRES_MEMORY_TABLE")
+                .unwrap_or_else(|_| "memories".into());
+            Ok(Box::new(PostgresMemory::new(&db_url, &schema, &table, Some(10))?))
+        }
+        #[cfg(not(feature = "memory-postgres"))]
+        MemoryBackendKind::Postgres => {
+            anyhow::bail!(
+                "memory backend 'postgres' requested but the `memory-postgres` feature is not enabled"
+            );
         }
         MemoryBackendKind::None => Ok(Box::new(NoneMemory::new())),
         MemoryBackendKind::Unknown => {
