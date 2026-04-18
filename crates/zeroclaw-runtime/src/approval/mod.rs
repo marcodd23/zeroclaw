@@ -122,7 +122,7 @@ impl ApprovalManager {
         }
 
         // always_ask overrides everything.
-        if self.always_ask.contains("*") || self.always_ask.contains(tool_name) {
+        if pattern_set_matches(&self.always_ask, tool_name) {
             return true;
         }
 
@@ -136,7 +136,7 @@ impl ApprovalManager {
         }
 
         // auto_approve skips the prompt.
-        if self.auto_approve.contains("*") || self.auto_approve.contains(tool_name) {
+        if pattern_set_matches(&self.auto_approve, tool_name) {
             return false;
         }
 
@@ -254,6 +254,42 @@ fn truncate_for_summary(input: &str, max_chars: usize) -> String {
     } else {
         input.to_string()
     }
+}
+
+// ── Pattern matching ─────────────────────────────────────────────
+
+/// Return `true` when `tool_name` matches any entry in `patterns`.
+///
+/// Two pattern forms are supported:
+///   1. Exact string match, e.g. `"file_read"` matches `"file_read"` only.
+///   2. Suffix-glob: an entry ending in `*` matches any tool name that
+///      starts with the prefix. The bare pattern `"*"` keeps its existing
+///      "match anything" semantic.
+///
+/// The glob form exists specifically for MCP tool names, which are emitted
+/// at runtime with a server-name prefix (e.g. `composio__COMPOSIO_SEARCH_TOOLS`,
+/// `composio__GMAIL_FETCH_EMAILS`, …). MCP servers like Composio expose
+/// hundreds of subtools that are discovered dynamically at `tool_search`
+/// time — enumerating them all statically in config would be impossible.
+/// A single entry like `"composio__*"` covers every tool from that server.
+///
+/// The match is kept intentionally narrow (terminal `*` only — no
+/// mid-string globs, no character classes, no escapes) so the config
+/// surface stays easy to audit: one character of pattern language, one
+/// code path.
+fn pattern_set_matches(patterns: &HashSet<String>, tool_name: &str) -> bool {
+    if patterns.contains("*") || patterns.contains(tool_name) {
+        return true;
+    }
+    patterns.iter().any(|p| {
+        // Require at least one character before the `*` so a stray one-char
+        // `"*"` entry keeps going through the exact-match branch above —
+        // preserves today's "wildcard only as the literal string `*`"
+        // semantic without loosening it accidentally.
+        p.len() > 1
+            && p.ends_with('*')
+            && tool_name.starts_with(&p[..p.len() - 1])
+    })
 }
 
 // ── Tests ────────────────────────────────────────────────────────
@@ -609,5 +645,127 @@ mod tests {
             mgr.needs_approval("weather"),
             "always_ask must override auto_approve"
         );
+    }
+
+    // ── Suffix-glob patterns (MCP tool names) ────────────────────
+
+    #[test]
+    fn auto_approve_prefix_glob_matches_name_with_prefix() {
+        // Motivating case: Composio's MCP server exposes tools with names
+        // like composio__COMPOSIO_SEARCH_TOOLS, composio__GMAIL_FETCH_EMAILS,
+        // composio__CALENDAR_CREATE_EVENT. A single `composio__*` entry in
+        // auto_approve should cover all of them — we can't statically
+        // enumerate 500+ Composio subtools.
+        let config = AutonomyConfig {
+            level: AutonomyLevel::Supervised,
+            auto_approve: vec!["composio__*".into()],
+            always_ask: vec![],
+            ..AutonomyConfig::default()
+        };
+        let mgr = ApprovalManager::for_non_interactive(&config);
+        assert!(!mgr.needs_approval("composio__COMPOSIO_SEARCH_TOOLS"));
+        assert!(!mgr.needs_approval("composio__GMAIL_FETCH_EMAILS"));
+        assert!(!mgr.needs_approval("composio__CALENDAR_CREATE_EVENT"));
+    }
+
+    #[test]
+    fn auto_approve_prefix_glob_does_not_match_other_prefixes() {
+        // Regression guard: the glob must be anchored to the prefix.
+        // composio__* must not match slack__SEND_MESSAGE or a bare
+        // `composio` tool name (different namespace, not an MCP tool).
+        let config = AutonomyConfig {
+            level: AutonomyLevel::Supervised,
+            auto_approve: vec!["composio__*".into()],
+            always_ask: vec![],
+            ..AutonomyConfig::default()
+        };
+        let mgr = ApprovalManager::for_non_interactive(&config);
+        assert!(mgr.needs_approval("slack__SEND_MESSAGE"));
+        assert!(mgr.needs_approval("composio")); // bare — not prefixed
+        assert!(mgr.needs_approval("other__composio_thing"));
+    }
+
+    #[test]
+    fn auto_approve_prefix_glob_requires_at_least_one_char_before_star() {
+        // The bare `"*"` keeps its existing "match anything" semantic.
+        // A one-character entry that happens to be `"*"` must go through
+        // the exact-match / wildcard branch, not the prefix-glob branch.
+        // This test pins the behaviour so a future refactor doesn't
+        // accidentally broaden wildcard matching via the glob path.
+        let config = AutonomyConfig {
+            level: AutonomyLevel::Supervised,
+            auto_approve: vec!["*".into()],
+            always_ask: vec![],
+            ..AutonomyConfig::default()
+        };
+        let mgr = ApprovalManager::for_non_interactive(&config);
+        assert!(!mgr.needs_approval("any_tool_at_all"));
+        assert!(!mgr.needs_approval(""));
+    }
+
+    #[test]
+    fn always_ask_prefix_glob_overrides_auto_approve() {
+        // always_ask should support the same suffix-glob as auto_approve.
+        // Motivating case: allow `composio__*` broadly via auto_approve,
+        // but keep Composio's remote code-exec tools (bash, workbench)
+        // behind approval — on non-interactive channels these auto-deny.
+        let config = AutonomyConfig {
+            level: AutonomyLevel::Supervised,
+            auto_approve: vec!["composio__*".into()],
+            always_ask: vec![
+                "composio__COMPOSIO_REMOTE_BASH_TOOL".into(),
+                "composio__COMPOSIO_REMOTE_WORKBENCH".into(),
+            ],
+            ..AutonomyConfig::default()
+        };
+        let mgr = ApprovalManager::for_non_interactive(&config);
+        // The ordinary Composio tools are still allowed.
+        assert!(!mgr.needs_approval("composio__COMPOSIO_SEARCH_TOOLS"));
+        assert!(!mgr.needs_approval("composio__GMAIL_FETCH_EMAILS"));
+        // The two code-exec tools still require approval (= deny on non-interactive).
+        assert!(mgr.needs_approval("composio__COMPOSIO_REMOTE_BASH_TOOL"));
+        assert!(mgr.needs_approval("composio__COMPOSIO_REMOTE_WORKBENCH"));
+    }
+
+    #[test]
+    fn always_ask_prefix_glob_gates_whole_server() {
+        // always_ask with a prefix-glob should gate every tool under
+        // that prefix. Useful if an operator wants to keep a whole
+        // MCP server behind approval.
+        let config = AutonomyConfig {
+            level: AutonomyLevel::Supervised,
+            auto_approve: vec![],
+            always_ask: vec!["dangerous__*".into()],
+            ..AutonomyConfig::default()
+        };
+        let mgr = ApprovalManager::for_non_interactive(&config);
+        assert!(mgr.needs_approval("dangerous__do_stuff"));
+        assert!(mgr.needs_approval("dangerous__other_stuff"));
+        // Non-matching prefix still falls through to the default
+        // (supervised → needs approval for unknown tools).
+        assert!(mgr.needs_approval("safe__thing"));
+    }
+
+    // ── pattern_set_matches unit coverage ────────────────────────
+
+    #[test]
+    fn pattern_set_matches_exact_wildcard_prefix() {
+        let mut patterns = HashSet::new();
+        patterns.insert("exact_tool".to_string());
+        patterns.insert("composio__*".to_string());
+
+        // Exact match.
+        assert!(pattern_set_matches(&patterns, "exact_tool"));
+        // Prefix-glob match.
+        assert!(pattern_set_matches(&patterns, "composio__anything"));
+        assert!(pattern_set_matches(&patterns, "composio__"));
+        // No match.
+        assert!(!pattern_set_matches(&patterns, "not_listed"));
+        assert!(!pattern_set_matches(&patterns, "composio")); // prefix without `__`
+
+        // Bare `*` still matches everything.
+        let mut star_only = HashSet::new();
+        star_only.insert("*".to_string());
+        assert!(pattern_set_matches(&star_only, "anything"));
     }
 }
