@@ -1547,6 +1547,19 @@ pub async fn run_tool_call_loop(
 
                 if decision == ApprovalResponse::No {
                     let denied = "Denied by user.".to_string();
+                    // Emit a stderr log line alongside the internal trace so
+                    // operators can see denials via `docker logs` / `nomad
+                    // alloc logs`. Without this, denied tool calls were
+                    // invisible in the container's log stream and showed up
+                    // only in the runtime trace buffer — which made
+                    // non-interactive-channel denials (auto-denies for tools
+                    // missing from auto_approve) very hard to diagnose.
+                    tracing::warn!(
+                        tool = %tool_name,
+                        channel = %channel_name,
+                        non_interactive = mgr.is_non_interactive(),
+                        "tool execution denied by approval manager",
+                    );
                     runtime_trace::record_event(
                         "tool_call_result",
                         Some(channel_name),
