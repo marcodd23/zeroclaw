@@ -1954,6 +1954,37 @@ pub async fn run_tool_call_loop(
     }
 }
 
+/// Construct the approval manager for an agent loop.
+///
+/// - **Interactive mode** (CLI with a real stdin operator): build the
+///   interactive manager. Tools that need approval call into
+///   `prompt_cli_interactive` for a Y/N/Always decision.
+/// - **Daemon/non-interactive mode** (WebSocket gateway, embedded agent, and
+///   every other non-CLI caller): build the non-interactive manager. Tools
+///   that would normally prompt the operator auto-deny instead.
+///
+/// Both branches return `Some(...)`. Historically the daemon branch
+/// returned `None`, which made the approval hook in the tool-call loop
+/// skip entirely — `always_ask`, `non_cli_excluded_tools`, and supervised
+/// policy were silently a no-op for daemon callers. That left non-CLI
+/// surfaces (notably the dashboard WebSocket chat) unguarded even when
+/// channels like Telegram enforced the same policy via `process_message`.
+///
+/// Always returning `Some` unifies policy enforcement across every caller
+/// that isn't a real CLI operator. If a caller genuinely wants zero
+/// approval gating, set `autonomy.level = "full"` in the config — that's
+/// the documented way to turn the whole policy off.
+fn build_approval_manager(
+    interactive: bool,
+    config: &zeroclaw_config::schema::AutonomyConfig,
+) -> Option<ApprovalManager> {
+    if interactive {
+        Some(ApprovalManager::from_config(config))
+    } else {
+        Some(ApprovalManager::for_non_interactive(config))
+    }
+}
+
 /// Build the tool instruction block for the system prompt so the LLM knows
 /// how to invoke tools.
 pub fn build_tool_instructions(
@@ -2385,11 +2416,7 @@ pub async fn run(
     }
 
     // ── Approval manager (supervised mode) ───────────────────────
-    let approval_manager = if interactive {
-        Some(ApprovalManager::from_config(&config.autonomy))
-    } else {
-        None
-    };
+    let approval_manager = build_approval_manager(interactive, &config.autonomy);
     let channel_name = if interactive { "cli" } else { "daemon" };
     let memory_session_id = session_state_file.as_deref().and_then(|path| {
         let raw = path.to_string_lossy().trim().to_string();
@@ -6110,5 +6137,59 @@ mod tests {
     #[test]
     fn strip_think_tags_preserves_text_without_tags() {
         assert_eq!(strip_think_tags("plain text"), "plain text");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Approval manager construction — regression guards for daemon-mode gap
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn build_approval_manager_daemon_mode_is_some_and_non_interactive() {
+        // Regression guard: daemon mode used to return `None`, which silently
+        // disabled the entire approval policy (always_ask, non_cli_excluded_tools,
+        // supervised-mode enforcement) for the WebSocket gateway chat and any
+        // other non-CLI caller. Must return Some(non-interactive manager).
+        let cfg = zeroclaw_config::schema::AutonomyConfig::default();
+        let mgr = build_approval_manager(false, &cfg)
+            .expect("daemon mode must build a Some(manager), not None");
+        assert!(
+            mgr.is_non_interactive(),
+            "daemon-mode manager must be flagged non_interactive so tools needing \
+             operator approval auto-deny instead of blocking on stdin"
+        );
+    }
+
+    #[test]
+    fn build_approval_manager_interactive_mode_is_cli_flavour() {
+        // Sanity: interactive mode still constructs the CLI flavour so stdin
+        // prompts work when a real operator is present.
+        let cfg = zeroclaw_config::schema::AutonomyConfig::default();
+        let mgr = build_approval_manager(true, &cfg)
+            .expect("interactive mode must build a Some(manager)");
+        assert!(
+            !mgr.is_non_interactive(),
+            "interactive-mode manager must NOT be non_interactive — needed so the \
+             CLI prompt path (Y/N/Always via stdin) stays reachable"
+        );
+    }
+
+    #[test]
+    fn build_approval_manager_respects_config_always_ask() {
+        // End-to-end confirmation: an always_ask entry in the autonomy config
+        // flows through the daemon-mode constructor and is enforced by the
+        // resulting manager. Guards against a future refactor that builds the
+        // non-interactive manager from a different config path.
+        let cfg = zeroclaw_config::schema::AutonomyConfig {
+            level: zeroclaw_config::policy::AutonomyLevel::Supervised,
+            auto_approve: vec!["composio__*".into()],
+            always_ask: vec!["composio__COMPOSIO_REMOTE_BASH_TOOL".into()],
+            ..zeroclaw_config::schema::AutonomyConfig::default()
+        };
+        let mgr =
+            build_approval_manager(false, &cfg).expect("daemon mode must build a manager");
+        // auto_approve still allows ordinary composio__* tools.
+        assert!(!mgr.needs_approval("composio__COMPOSIO_SEARCH_TOOLS"));
+        // always_ask still gates the specific bash tool.
+        assert!(mgr.needs_approval("composio__COMPOSIO_REMOTE_BASH_TOOL"));
     }
 }
