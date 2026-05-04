@@ -173,6 +173,28 @@ impl CostTracker {
         let storage = self.lock_storage();
         storage.get_cost_for_month(year, month)
     }
+
+    /// Aggregate cost records into per-day buckets for the last `days` days,
+    /// inclusive of today. Returns one entry per day in chronological order;
+    /// days with no activity are included with zero values so consumers can
+    /// render a continuous time series without filling gaps client-side.
+    pub fn get_daily_breakdown(&self, days: u32) -> Result<Vec<DailyCostEntry>> {
+        let storage = self.lock_storage();
+        storage.get_daily_breakdown(days)
+    }
+}
+
+/// One day's worth of aggregated cost data.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DailyCostEntry {
+    /// ISO-8601 date (YYYY-MM-DD), UTC.
+    pub date: String,
+    /// Sum of cost_usd across all records for the day.
+    pub cost_usd: f64,
+    /// Sum of total_tokens across all records for the day.
+    pub total_tokens: u64,
+    /// Number of records (LLM requests) recorded for the day.
+    pub request_count: u32,
 }
 
 // ── Process-global singleton ────────────────────────────────────────
@@ -428,6 +450,48 @@ impl CostStorage {
 
         Ok(cost)
     }
+
+    /// Aggregate per-day costs over the last `days` days (UTC), inclusive of today.
+    /// Walks the file once and buckets by date so the cost is O(records), not
+    /// O(records * days). Days with zero activity are still emitted so the
+    /// caller can render a continuous time series.
+    fn get_daily_breakdown(&self, days: u32) -> Result<Vec<DailyCostEntry>> {
+        let days = days.max(1) as i64;
+        let today = Utc::now().date_naive();
+        // Inclusive window: [today - (days-1), today].
+        let earliest = today - chrono::Duration::days(days - 1);
+
+        // Pre-seed every day in the window with zero so the response is
+        // contiguous regardless of activity gaps.
+        let mut buckets: HashMap<NaiveDate, (f64, u64, u32)> = HashMap::new();
+        let mut cursor = earliest;
+        while cursor <= today {
+            buckets.insert(cursor, (0.0, 0, 0));
+            cursor += chrono::Duration::days(1);
+        }
+
+        self.for_each_record(|record| {
+            let date = record.usage.timestamp.naive_utc().date();
+            if date >= earliest && date <= today {
+                let entry = buckets.entry(date).or_insert((0.0, 0, 0));
+                entry.0 += record.usage.cost_usd;
+                entry.1 += record.usage.total_tokens;
+                entry.2 += 1;
+            }
+        })?;
+
+        let mut entries: Vec<DailyCostEntry> = buckets
+            .into_iter()
+            .map(|(date, (cost_usd, total_tokens, request_count))| DailyCostEntry {
+                date: date.format("%Y-%m-%d").to_string(),
+                cost_usd,
+                total_tokens,
+                request_count,
+            })
+            .collect();
+        entries.sort_by(|a, b| a.date.cmp(&b.date));
+        Ok(entries)
+    }
 }
 
 #[cfg(test)]
@@ -550,6 +614,37 @@ mod tests {
         let tracker = CostTracker::new(enabled_config(), tmp.path()).unwrap();
         let today_cost = tracker.get_daily_cost(Utc::now().date_naive()).unwrap();
         assert!((today_cost - valid_usage.cost_usd).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn daily_breakdown_returns_contiguous_window_with_zero_for_inactive_days() {
+        let tmp = TempDir::new().unwrap();
+        let tracker = CostTracker::new(enabled_config(), tmp.path()).unwrap();
+
+        // Record one usage today.
+        let usage = TokenUsage::new("test/model", 100, 50, 0.001, 0.002);
+        tracker.record_usage(usage).unwrap();
+
+        let breakdown = tracker.get_daily_breakdown(7).unwrap();
+        // 7 contiguous entries, oldest first, even though only today has data.
+        assert_eq!(breakdown.len(), 7);
+        let today = Utc::now().date_naive().format("%Y-%m-%d").to_string();
+        assert_eq!(breakdown.last().unwrap().date, today);
+        assert!(breakdown.last().unwrap().cost_usd > 0.0);
+        assert_eq!(breakdown.last().unwrap().request_count, 1);
+        // Earlier days are present and zeroed.
+        assert_eq!(breakdown[0].cost_usd, 0.0);
+        assert_eq!(breakdown[0].total_tokens, 0);
+        assert_eq!(breakdown[0].request_count, 0);
+    }
+
+    #[test]
+    fn daily_breakdown_clamps_days_to_at_least_one() {
+        let tmp = TempDir::new().unwrap();
+        let tracker = CostTracker::new(enabled_config(), tmp.path()).unwrap();
+
+        let breakdown = tracker.get_daily_breakdown(0).unwrap();
+        assert_eq!(breakdown.len(), 1);
     }
 
     #[test]

@@ -69,6 +69,12 @@ pub struct CronRunsQuery {
 }
 
 #[derive(Deserialize)]
+pub struct CostDailyQuery {
+    /// Window size in days, inclusive of today. Defaults to 7, clamped 1..=90.
+    pub days: Option<u32>,
+}
+
+#[derive(Deserialize)]
 pub struct CronAddBody {
     pub name: Option<String>,
     pub schedule: String,
@@ -738,6 +744,36 @@ pub async fn handle_api_memory_delete(
             Json(serde_json::json!({"error": format!("Memory forget failed: {e}")})),
         )
             .into_response(),
+    }
+}
+
+/// GET /api/cost/daily?days=N — per-day cost breakdown for the last N days (UTC),
+/// inclusive of today. Days without activity are returned with zero values so
+/// callers can render a continuous time series.
+pub async fn handle_api_cost_daily(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<CostDailyQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let days = params.days.unwrap_or(7).clamp(1, 90);
+
+    if let Some(ref tracker) = state.cost_tracker {
+        match tracker.get_daily_breakdown(days) {
+            Ok(daily) => Json(serde_json::json!({"days": days, "daily": daily})).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Daily breakdown failed: {e}")})),
+            )
+                .into_response(),
+        }
+    } else {
+        // No tracker = cost tracking disabled in config. Return an empty
+        // window so consumers don't have to special-case the missing tracker.
+        Json(serde_json::json!({"days": days, "daily": []})).into_response()
     }
 }
 
